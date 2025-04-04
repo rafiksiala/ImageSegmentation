@@ -114,10 +114,12 @@ def preprocess_image_from_path(path: str):
     return np.expand_dims(img_array, axis=0)
 
 def predict_mask(img_array):
-    prediction = model.predict(img_array)
-    reshaped = prediction[0].reshape((img_height, img_width, n_classes))
-    predicted_mask = np.argmax(reshaped, axis=-1)
-    return predicted_mask
+    dummy = np.zeros((img_height, img_width), dtype=np.uint8)
+    return dummy
+    #prediction = model.predict(img_array)
+    #reshaped = prediction[0].reshape((img_height, img_width, n_classes))
+    #predicted_mask = np.argmax(reshaped, axis=-1)
+    #return predicted_mask
 
 # ------------------------------------------------------------------------------
 
