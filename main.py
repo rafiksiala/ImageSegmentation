@@ -2,9 +2,10 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse, FileResponse, Response
 from pydantic import BaseModel
 from typing import Optional
-import os
-import numpy as np
 from PIL import Image
+import numpy as np
+import requests
+import os
 import io
 
 import matplotlib.pyplot as plt
@@ -16,6 +17,7 @@ from tensorflow.keras.preprocessing import image
 from tensorflow.keras.optimizers import Adam
 from keras.losses import CategoricalCrossentropy
 from keras import backend as K
+
 
 # ------------------------------------------------------------------------------
 
@@ -95,7 +97,28 @@ def total_loss(y_true, y_pred):
 
 # ------------------------------------------------------------------------------
 
-model = load_model("models/mini_unet_model.keras", compile=False)
+MODEL_URL = "https://imgsegmodelstorage.blob.core.windows.net/models/unet_model.keras"
+MODEL_PATH = "models/unet_model.keras"
+
+def download_model_if_needed():
+    os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+
+    if not os.path.exists(MODEL_PATH):
+        print("Téléchargement du modèle depuis Azure Blob Storage...")
+        with requests.get(MODEL_URL, stream=True) as r:
+            r.raise_for_status()
+            with open(MODEL_PATH, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        print("Modèle téléchargé avec succès !")
+    else:
+        print("Modèle déjà présent.")
+
+# Télécharger le modèle si nécessaire
+download_model_if_needed()
+
+# Charger le modèle
+model = load_model(MODEL_PATH, compile=False)
 model.compile(optimizer=Adam(1e-4), loss=total_loss, metrics=[dice_coeff, 'accuracy'])
 
 # ------------------------------------------------------------------------------
