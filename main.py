@@ -11,12 +11,11 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
 
+from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing import image
 from tensorflow.keras.optimizers import Adam
 from keras.losses import CategoricalCrossentropy
 from keras import backend as K
-
-#from unet import build_model
 
 # ------------------------------------------------------------------------------
 
@@ -96,10 +95,8 @@ def total_loss(y_true, y_pred):
 
 # ------------------------------------------------------------------------------
 
-#model = build_model(img_height, img_width, nclasses=8, use_vgg_encoder=True)
-#model.load_weights("model/unet_vgg_best.weights.h5")
-
-#model.compile(optimizer=Adam(1e-4), loss=total_loss, metrics=[dice_coeff, 'accuracy'])
+model = load_model("models/mini_unet_model.keras", compile=False)
+model.compile(optimizer=Adam(1e-4), loss=total_loss, metrics=[dice_coeff, 'accuracy'])
 
 # ------------------------------------------------------------------------------
 
@@ -117,12 +114,10 @@ def preprocess_image_from_path(path: str):
     return np.expand_dims(img_array, axis=0)
 
 def predict_mask(img_array):
-    dummy = np.zeros((img_height, img_width), dtype=np.uint8)
-    return dummy
-    #prediction = model.predict(img_array)
-    #reshaped = prediction[0].reshape((img_height, img_width, n_classes))
-    #predicted_mask = np.argmax(reshaped, axis=-1)
-    #return predicted_mask
+    prediction = model.predict(img_array)
+    reshaped = prediction[0].reshape((img_height, img_width, n_classes))
+    predicted_mask = np.argmax(reshaped, axis=-1)
+    return predicted_mask
 
 # ------------------------------------------------------------------------------
 
