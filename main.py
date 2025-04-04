@@ -95,8 +95,8 @@ def total_loss(y_true, y_pred):
 
 # ------------------------------------------------------------------------------
 
-#model = load_model("model/unet_model.h5", compile=False)
-#model.compile(optimizer=Adam(1e-4), loss=total_loss, metrics=[dice_coeff, 'accuracy'])
+model = load_model("model/unet_model.keras", compile=False)
+model.compile(optimizer=Adam(1e-4), loss=total_loss, metrics=[dice_coeff, 'accuracy'])
 
 # ------------------------------------------------------------------------------
 
@@ -114,12 +114,10 @@ def preprocess_image_from_path(path: str):
     return np.expand_dims(img_array, axis=0)
 
 def predict_mask(img_array):
-    dummy = np.zeros((img_height, img_width), dtype=np.uint8)
-    return dummy
-    #prediction = model.predict(img_array)
-    #reshaped = prediction[0].reshape((img_height, img_width, n_classes))
-    #predicted_mask = np.argmax(reshaped, axis=-1)
-    #return predicted_mask
+    prediction = model.predict(img_array)
+    reshaped = prediction[0].reshape((img_height, img_width, n_classes))
+    predicted_mask = np.argmax(reshaped, axis=-1)
+    return predicted_mask
 
 # ------------------------------------------------------------------------------
 
