@@ -11,11 +11,12 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
 
-from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing import image
 from tensorflow.keras.optimizers import Adam
 from keras.losses import CategoricalCrossentropy
 from keras import backend as K
+
+#from unet import build_model
 
 # ------------------------------------------------------------------------------
 
@@ -95,8 +96,10 @@ def total_loss(y_true, y_pred):
 
 # ------------------------------------------------------------------------------
 
-model = load_model("model/unet_model.keras", compile=False)
-model.compile(optimizer=Adam(1e-4), loss=total_loss, metrics=[dice_coeff, 'accuracy'])
+#model = build_model(img_height, img_width, nclasses=8, use_vgg_encoder=True)
+#model.load_weights("model/unet_vgg_best.weights.h5")
+
+#model.compile(optimizer=Adam(1e-4), loss=total_loss, metrics=[dice_coeff, 'accuracy'])
 
 # ------------------------------------------------------------------------------
 
