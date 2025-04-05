@@ -174,4 +174,4 @@ cython_debug/
 .pypirc
 
 # Model (Large File Storage)
-models/*
+models
