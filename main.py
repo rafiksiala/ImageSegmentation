@@ -8,8 +8,10 @@ import requests
 import os
 import io
 
-import matplotlib.pyplot as plt
 import matplotlib
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+from matplotlib.patches import Patch
 matplotlib.use('Agg')
 
 from tensorflow.keras.models import load_model
@@ -21,11 +23,26 @@ from keras import backend as K
 
 # ------------------------------------------------------------------------------
 
+cityscapes_colors = [
+    (0, 0, 0),          # void
+    (180, 180, 180),    # flat
+    (200, 100, 100),    # construction
+    (100, 40, 40),      # object
+    (107, 142, 35),     # nature
+    (70, 130, 180),     # sky
+    (220, 20, 60),      # human
+    (0, 0, 142),        # vehicle
+]
+class_names = ['void', 'flat', 'construction', 'object', 'nature', 'sky', 'human', 'vehicle']
+cmap = ListedColormap(np.array(cityscapes_colors) / 255.0)
+
+# ------------------------------------------------------------------------------
+
 app = FastAPI()
 
 DATA_DIR = "data/images"
 MASK_DIR = "data/masks"
-img_height, img_width, n_classes = 256, 256, 8
+img_height, img_width, n_classes = 256, 256, len(class_names)
 
 # ------------------------------------------------------------------------------
 
@@ -64,9 +81,9 @@ async def get_mask(image_id: str):
     one_hot_mask = np.load(npy_path)  # shape: (h, w, n_classes)
     mask_argmax = np.argmax(one_hot_mask, axis=-1)  # shape: (h, w)
 
-    # Affichage en image avec cmap tab10
-    fig, ax = plt.subplots()
-    ax.imshow(mask_argmax, cmap='tab10', vmin=0, vmax=n_classes - 1)
+    # Affichage avec légende
+    fig, ax = plt.subplots(figsize=(6, 6))
+    im = ax.imshow(mask_argmax, cmap=cmap, vmin=0, vmax=n_classes - 1)
     ax.axis("off")
 
     # Sauvegarde dans un buffer image
