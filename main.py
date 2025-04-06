@@ -14,6 +14,7 @@ from matplotlib.colors import ListedColormap
 from matplotlib.patches import Patch
 matplotlib.use('Agg')
 
+import tensorflow as tf
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing import image
 from tensorflow.keras.optimizers import Adam
@@ -22,6 +23,18 @@ from keras import backend as K
 
 
 # ------------------------------------------------------------------------------
+# Mapping des 34 classes → 8 grandes catégories
+cats = {
+    'void': [0, 1, 2, 3, 4, 5, 6],
+    'flat': [7, 8, 9, 10],
+    'construction': [11, 12, 13, 14, 15, 16],
+    'object': [17, 18, 19, 20],
+    'nature': [21, 22],
+    'sky': [23],
+    'human': [24, 25],
+    'vehicle': [26, 27, 28, 29, 30, 31, 32, 33, -1],
+}
+cat_mapping = {i: idx for idx, (_, ids) in enumerate(cats.items()) for i in ids}
 
 cityscapes_colors = [
     (0, 0, 0),          # void
@@ -54,50 +67,89 @@ def home():
 async def favicon():
     return FileResponse("favicon.ico")
 
+# Endpoint pour lister toutes les images disponibles dans DATA_DIR
 @app.get("/list_images/")
-async def list_images():
+async def list_available_images():
     print("📂 Lecture des images dans :", DATA_DIR)
+
+    # Liste tous les fichiers dans le dossier de données
     files = os.listdir(DATA_DIR)
     print("Fichiers trouvés :", files)
+
+    # Récupère uniquement les identifiants d’images (sans extension)
     ids = [f.split(".")[0] for f in files if f.endswith(".png")]
+
+    # Retourne la liste des IDs sous forme JSON
     return JSONResponse(content={"ids": ids})
 
 
-@app.get("/list_images/{image_id}.png")
-async def get_image(image_id: str):
+# Endpoint pour récupérer une image par son ID
+@app.get("/list_images/{image_id}")
+async def fetch_image_by_id(image_id: str):
+    # Construit le chemin vers l'image PNG correspondante
     image_path = os.path.join(DATA_DIR, f"{image_id}.png")
+
+    # Vérifie que l'image existe
     if not os.path.exists(image_path):
         return JSONResponse(status_code=404, content={"error": "Image not found"})
+
+    # Retourne l'image en tant que fichier PNG
     return FileResponse(image_path, media_type="image/png")
 
+
+# Fonction pour charger, redimensionner et encoder une image de masque en format one-hot
+def load_and_encode_mask(mask_path):
+    # Chargement du masque en niveaux de gris
+    mask = image.img_to_array(image.load_img(mask_path, color_mode='grayscale'))
+
+    # Redimensionnement à la taille cible (img_height, img_width)
+    mask = tf.image.resize(mask, (img_height, img_width), method='nearest')
+
+    # Conversion en entier (uint8) pour traitement par numpy
+    mask = tf.cast(mask, tf.uint8).numpy()
+
+    # Fonction interne pour encoder le masque en one-hot
+    def encode_mask(mask_img):
+        mask_img = np.squeeze(mask_img).astype(np.uint8)  # Suppression de la dimension canal
+        new_mask = np.zeros((img_height, img_width, n_classes), dtype=np.float32)
+        for label, class_idx in cat_mapping.items():  # Mapping label -> indice classe
+            new_mask[mask_img == label, class_idx] = 1.0
+        return new_mask
+
+    encoded_mask = encode_mask(mask)
+
+    # Retourne la version "argmax" (classe dominante par pixel)
+    return np.argmax(encoded_mask, axis=-1)
+
+# Endpoint FastAPI pour récupérer une image du masque colorisée
 @app.get("/get_mask/{image_id}")
 async def get_mask(image_id: str):
-    npy_path = os.path.join(MASK_DIR, f"{image_id}.npy")
+    mask_path = os.path.join(MASK_DIR, f"{image_id}.png")
 
-    if not os.path.exists(npy_path):
+    # Vérifie si le fichier de masque existe
+    if not os.path.exists(mask_path):
         return JSONResponse(status_code=404, content={"error": "Mask not found"})
 
-    # Charger et transformer le masque
-    one_hot_mask = np.load(npy_path)  # shape: (h, w, n_classes)
-    mask_argmax = np.argmax(one_hot_mask, axis=-1)  # shape: (h, w)
+    # Chargement et traitement du masque
+    mask = load_and_encode_mask(mask_path)
 
-    # Affichage avec légende
+    # Affichage du masque avec une colormap
     fig, ax = plt.subplots(figsize=(6, 6))
-    im = ax.imshow(mask_argmax, cmap=cmap, vmin=0, vmax=n_classes - 1)
+    im = ax.imshow(mask, cmap=cmap, vmin=0, vmax=n_classes - 1)
     ax.axis("off")
 
-    # Sauvegarde dans un buffer image
+    # Enregistrement de l'image dans un buffer mémoire
     buf = io.BytesIO()
     plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0)
     plt.close(fig)
     buf.seek(0)
 
+    # Retour de l'image en réponse HTTP
     return Response(content=buf.getvalue(), media_type="image/png")
 
 # ------------------------------------------------------------------------------
 
 # Dice coefficient and loss
-
 def dice_coeff(y_true, y_pred, smooth=1.):
     y_true_f = K.flatten(y_true)
     y_pred_f = K.flatten(y_pred)
