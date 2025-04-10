@@ -166,8 +166,8 @@ def total_loss(y_true, y_pred):
 
 # ------------------------------------------------------------------------------
 
-MODEL_URL = "https://imgsegmodelstorage.blob.core.windows.net/models/dilatednet_model_data_aug.keras"
-MODEL_PATH = "models/dilatednet_model_data_aug.keras"
+MODEL_URL = "https://imgsegmodelstorage.blob.core.windows.net/models/dilatednet.keras"
+MODEL_PATH = "models/dilatednet.keras"
 
 def download_model_if_needed():
     os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
