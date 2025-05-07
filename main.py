@@ -101,7 +101,6 @@ app = FastAPI()
 
 DATA_DIR = "data/images"
 MASK_DIR = "data/masks"
-img_height, img_width, n_classes = 256, 256, len(cityscapes_classes_8)
 
 # ------------------------------------------------------------------------------
 
@@ -300,6 +299,7 @@ def predict_mask(image_input, original_size, model_name: str = "dilatednet", fro
 
     if model_name == "dilatednet":
         # Prétraitement pour dilatednet
+        img_height, img_width, n_classes = 256, 256, len(cityscapes_classes_8)
         img = image_input.resize((img_width, img_height))
         img_array = image.img_to_array(img) / 255.0
         img_array =  np.expand_dims(img_array, axis=0)
