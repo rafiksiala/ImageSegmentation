@@ -68,4 +68,4 @@ jobs:
         with:
           app-name: 'image-segmentation-api'
           slot-name: 'Production'
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_7B8AD35B29F649C2828F25B518B9CD4B }}
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_21F9CFE7F3D14EF395BF4F15CC736A6F }}
