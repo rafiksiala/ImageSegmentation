@@ -1,9 +1,23 @@
-fastapi==0.115.12
+# Serveur web
+fastapi==0.115.1
 uvicorn==0.34.0
-gunicorn==23.0.0
+python-multipart==0.0.20
+requests==2.32.3
+
+# Deep Learning & Modèles
+tensorflow-cpu==2.12.0
+torch==2.0.1
+torchvision==0.15.2
+transformers==4.33.3
+datasets==2.14.0
+
+# Traitement image & affichage
 numpy==1.23.5
 pillow==11.1.0
-python-multipart==0.0.20
 matplotlib==3.10.1
-tensorflow-cpu==2.12.0
-requests==2.32.3
+opencv-python-headless==4.8.1.78
+scikit-image==0.21.0
+
+# Data Science
+pandas==2.1.1
+scikit-learn==1.3.0

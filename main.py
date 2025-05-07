@@ -1,5 +1,5 @@
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import JSONResponse, FileResponse, Response
+from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.responses import JSONResponse, FileResponse, Response, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 from PIL import Image
@@ -21,9 +21,10 @@ from tensorflow.keras.optimizers import Adam
 from keras.losses import CategoricalCrossentropy
 from keras import backend as K
 
-from transformers import Mask2FormerForUniversalSegmentation, AutoImageProcessor
+from transformers import Mask2FormerForUniversalSegmentation, Mask2FormerImageProcessor
 import torch
 
+import zipfile
 
 # ------------------------------------------------------------------------------
 # Mapping des 34 classes → 8 grandes catégories
@@ -38,36 +39,61 @@ cats = {
     'vehicle': [26, 27, 28, 29, 30, 31, 32, 33, -1],
 }
 cat_mapping = {i: idx for idx, (_, ids) in enumerate(cats.items()) for i in ids}
+cityscapes_classes_8 = list(cats.keys())
 
-EIGHT_CLASS_COLORS = [
-    (0, 0, 0),           # 0 - void
-    (128, 64, 128),      # 1 - flat
-    (70, 70, 70),        # 2 - construction
-    (255, 165, 0),       # 3 - object
-    (107, 142, 35),      # 4 - nature
-    (70, 130, 180),      # 5 - sky
-    (220, 20, 60),       # 6 - human
-    (0, 0, 142)          # 7 - vehicle
+cityscapes_palette_8 = [
+    (0, 0, 0),           # 0 - void        → noir
+    (128, 64, 128),      # 1 - flat        → violet (road)
+    (70, 70, 70),        # 2 - construction→ gris
+    (255, 165, 0),       # 3 - object      → orange
+    (107, 142, 35),      # 4 - nature      → vert
+    (70, 130, 180),      # 5 - sky         → bleu ciel
+    (220, 20, 60),       # 6 - human       → rouge
+    (0, 0, 142)          # 7 - vehicle     → bleu foncé
 ]
-class_names = ['void', 'flat', 'construction', 'object', 'nature', 'sky', 'human', 'vehicle']
-cmap = ListedColormap(np.array(EIGHT_CLASS_COLORS) / 255.0)
+cmap_cityscapes_8 = ListedColormap(np.array(cityscapes_palette_8) / 255.0)
 
+def apply_palette(mask, palette):
+    color_seg = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
+    for class_id, color in enumerate(palette):
+        color_seg[mask == class_id] = color
+    return color_seg
 
-CITYSCAPES_TO_8_CLASSES = {
-    0: 1, 1: 1,
-    2: 2, 3: 2, 4: 2,
-    5: 3, 6: 3, 7: 3,
-    8: 4, 9: 4,
-    10: 5,
-    11: 6, 12: 6,
-    13: 7, 14: 7, 15: 7, 16: 7, 17: 7, 18: 7
+def blend(image, mask, palette):
+    color_seg = apply_palette(mask, palette)
+    # Fusion image originale (RGB) et masque coloré
+    blended = 0.5 * np.array(image, dtype=float) + 0.5 * color_seg
+    return blended.astype(np.uint8)
+
+cityscapes_19_to_8_mapping = {
+    0: 1, 1: 1,               # flat
+    2: 2, 3: 2, 4: 2,         # construction
+    5: 3, 6: 3, 7: 3,         # object
+    8: 4, 9: 4,               # nature
+    10: 5,                    # sky
+    11: 6, 12: 6,             # human
+    13: 7, 14: 7, 15: 7, 16: 7, 17: 7, 18: 7  # vehicle
 }
-def remap_cityscapes_to_8classes(mask: np.ndarray) -> np.ndarray:
+def remap_cityscapes_to_8classes(mask):
     remapped = np.full_like(mask, fill_value=255)
-    for train_id, new_id in CITYSCAPES_TO_8_CLASSES.items():
+    for train_id, new_id in cityscapes_19_to_8_mapping.items():
         remapped[mask == train_id] = new_id
     return remapped
 
+def render_to_buffer(image, figsize=(12, 6)):
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.imshow(image)
+    ax.axis("off")
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0)
+    plt.close(fig)
+    buf.seek(0)
+
+    return buf
+
+def generate_mask_overlay(img, mask):
+    return render_to_buffer(blend(img, mask, cityscapes_palette_8))
 
 # ------------------------------------------------------------------------------
 
@@ -75,7 +101,7 @@ app = FastAPI()
 
 DATA_DIR = "data/images"
 MASK_DIR = "data/masks"
-img_height, img_width, n_classes = 256, 256, len(class_names)
+img_height, img_width, n_classes = 256, 256, len(cityscapes_classes_8)
 
 # ------------------------------------------------------------------------------
 
@@ -94,7 +120,6 @@ async def list_available_images():
 
     # Liste tous les fichiers dans le dossier de données
     files = os.listdir(DATA_DIR)
-    print("Fichiers trouvés :", files)
 
     # Récupère uniquement les identifiants d’images (sans extension)
     ids = [f.split(".")[0] for f in files if f.endswith(".png")]
@@ -102,49 +127,54 @@ async def list_available_images():
     # Retourne la liste des IDs sous forme JSON
     return JSONResponse(content={"ids": ids})
 
-
 # Endpoint pour récupérer une image par son ID
 @app.get("/list_images/{image_id}")
 async def fetch_image_by_id(image_id: str):
     # Construit le chemin vers l'image PNG correspondante
     image_path = os.path.join(DATA_DIR, f"{image_id}.png")
+    img = np.array(Image.open(image_path).convert("RGB"), dtype=int)
+
+    # Affichage du masque avec une colormap
+    buf = render_to_buffer(img)
 
     # Vérifie que l'image existe
     if not os.path.exists(image_path):
         return JSONResponse(status_code=404, content={"error": "Image not found"})
 
-    # Retourne l'image en tant que fichier PNG
-    return FileResponse(image_path, media_type="image/png")
-
+    # Retour de l'image en réponse HTTP
+    return Response(content=buf.getvalue(), media_type="image/png")
 
 # Fonction pour charger, redimensionner et encoder une image de masque en format one-hot
 def load_and_encode_mask(mask_path):
-    # Chargement du masque en niveaux de gris
-    mask = image.img_to_array(image.load_img(mask_path, color_mode='grayscale'))
+    # Chargement du masque en niveaux de gris (format PIL)
+    mask = image.load_img(mask_path, color_mode='grayscale')
 
-    # Redimensionnement à la taille cible (img_height, img_width)
-    mask = tf.image.resize(mask, (img_height, img_width), method='nearest')
+    # Conversion en tableau numpy (H, W, 1)
+    mask = image.img_to_array(mask)
 
-    # Conversion en entier (uint8) pour traitement par numpy
+    # Conversion en entier (uint8)
     mask = tf.cast(mask, tf.uint8).numpy()
 
     # Fonction interne pour encoder le masque en one-hot
     def encode_mask(mask_img):
-        mask_img = np.squeeze(mask_img).astype(np.uint8)  # Suppression de la dimension canal
-        new_mask = np.zeros((img_height, img_width, n_classes), dtype=np.float32)
-        for label, class_idx in cat_mapping.items():  # Mapping label -> indice classe
+        mask_img = np.squeeze(mask_img).astype(np.uint8)  # Suppression du canal inutile
+        height, width = mask_img.shape
+        new_mask = np.zeros((height, width, n_classes), dtype=np.float32)
+        for label, class_idx in cat_mapping.items():
             new_mask[mask_img == label, class_idx] = 1.0
         return new_mask
 
     encoded_mask = encode_mask(mask)
 
-    # Retourne la version "argmax" (classe dominante par pixel)
+    # Retourne la version "argmax" (classe dominante par pixel), sans resize
     return np.argmax(encoded_mask, axis=-1)
 
 # Endpoint FastAPI pour récupérer une image du masque colorisée
 @app.get("/get_mask/{image_id}")
 async def get_mask(image_id: str):
     mask_path = os.path.join(MASK_DIR, f"{image_id}.png")
+    image_path = os.path.join(DATA_DIR, f"{image_id}.png")
+    img = np.array(Image.open(image_path).convert("RGB"), dtype=int)
 
     # Vérifie si le fichier de masque existe
     if not os.path.exists(mask_path):
@@ -154,165 +184,192 @@ async def get_mask(image_id: str):
     mask = load_and_encode_mask(mask_path)
 
     # Affichage du masque avec une colormap
-    fig, ax = plt.subplots(figsize=(6, 6))
-    im = ax.imshow(mask, cmap=cmap, vmin=0, vmax=n_classes - 1)
-    ax.axis("off")
-
-    # Enregistrement de l'image dans un buffer mémoire
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0)
-    plt.close(fig)
-    buf.seek(0)
+    buf = generate_mask_overlay(img, mask)
 
     # Retour de l'image en réponse HTTP
     return Response(content=buf.getvalue(), media_type="image/png")
 
-# ------------------------------------------------------------------------------
+# Renvoie la liste des classes et leurs couleurs associées.
+@app.get("/legend_data/")
+def get_legend_data():
+    legend = [
+        {"name": name, "color": list(color)}
+        for name, color in zip(cityscapes_classes_8, cityscapes_palette_8)
+    ]
+    return JSONResponse(content={"legend": legend})
 
-# Dice coefficient and loss
-def dice_coeff(y_true, y_pred, smooth=1.):
-    y_true_f = K.flatten(y_true)
-    y_pred_f = K.flatten(y_pred)
-    intersection = K.sum(y_true_f * y_pred_f)
-    return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
-
-def dice_loss(y_true, y_pred):
-    return 1.0 - dice_coeff(y_true, y_pred)
-
-def total_loss(y_true, y_pred):
-    ce = CategoricalCrossentropy()(y_true, y_pred)
-    dl = dice_loss(y_true, y_pred)
-    return ce + 3 * dl
+# Renvoie les noms des modèles disponibles
+@app.get("/available_models/")
+def list_models():
+    return {"models": list(models.keys())}
 
 # ------------------------------------------------------------------------------
 
 DILATEDNET_URL = "https://imgsegmodelstorage.blob.core.windows.net/models/dilatednet.keras"
 DILATEDNET_PATH = "models/dilatednet.keras"
 
-def download_delatednet_model_if_needed():
-    os.makedirs(os.path.dirname(DILATEDNET_PATH), exist_ok=True)
+MASK2FORMER_URL = "https://imgsegmodelstorage.blob.core.windows.net/models/mask2former.zip"
+MASK2FORMER_ZIP_PATH = "models/mask2former.zip"
+MASK2FORMER_DIR = "models/mask2former/mask2former"
 
+def download_models_if_needed():
+    # --- DilatedNet ---
+    os.makedirs(os.path.dirname(DILATEDNET_PATH), exist_ok=True)
     if not os.path.exists(DILATEDNET_PATH):
-        print("Téléchargement du modèle depuis Azure Blob Storage...")
+        print("Téléchargement du modèle DilatedNet...")
         with requests.get(DILATEDNET_URL, stream=True) as r:
             r.raise_for_status()
             with open(DILATEDNET_PATH, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
-        print("Modèle téléchargé avec succès !")
+        print("Modèle DilatedNet téléchargé.")
     else:
-        print("Modèle déjà présent.")
+        print("Modèle DilatedNet déjà présent.")
+
+    # --- Mask2Former ---
+    os.makedirs(MASK2FORMER_DIR, exist_ok=True)
+    if not os.path.exists(os.path.join(MASK2FORMER_DIR, "config.json")):
+        print("Téléchargement du modèle Mask2Former...")
+        with requests.get(MASK2FORMER_URL, stream=True) as r:
+            r.raise_for_status()
+            with open(MASK2FORMER_ZIP_PATH, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        print("Extraction du modèle Mask2Former...")
+        with zipfile.ZipFile(MASK2FORMER_ZIP_PATH, 'r') as zip_ref:
+            zip_ref.extractall(MASK2FORMER_DIR)
+        os.remove(MASK2FORMER_ZIP_PATH)
+        print("Modèle Mask2Former téléchargé et extrait.")
+    else:
+        print("Modèle Mask2Former déjà extrait.")
 
 # Télécharger le modèle si nécessaire
-download_delatednet_model_if_needed()
+download_models_if_needed()
 
 # Charger le modèle
-
 def load_model(model_name):
     if model_name == "dilatednet":
+
+        # Dice coefficient and loss
+        def dice_coeff(y_true, y_pred, smooth=1.):
+            y_true_f = K.flatten(y_true)
+            y_pred_f = K.flatten(y_pred)
+            intersection = K.sum(y_true_f * y_pred_f)
+            return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
+
+        def dice_loss(y_true, y_pred):
+            return 1.0 - dice_coeff(y_true, y_pred)
+
+        def total_loss(y_true, y_pred):
+            ce = CategoricalCrossentropy()(y_true, y_pred)
+            dl = dice_loss(y_true, y_pred)
+            return ce + 3 * dl
+
         model = tf.keras.models.load_model(DILATEDNET_PATH, compile=False)
         model.compile(optimizer=Adam(1e-4), loss=total_loss, metrics=[dice_coeff, 'accuracy'])
         return model
-    elif model_name == "mask2former":
+    elif model_name == "mask2former_pretrained":
         model_id = "facebook/mask2former-swin-small-cityscapes-semantic"
         return Mask2FormerForUniversalSegmentation.from_pretrained(model_id)
-
+    elif model_name == "mask2former_finetuned":
+        return Mask2FormerForUniversalSegmentation.from_pretrained(MASK2FORMER_DIR)
 
 def load_processor(model_name):
-    if model_name == "mask2former":
+    if model_name == "mask2former_pretrained":
         model_id = "facebook/mask2former-swin-small-cityscapes-semantic"
-        processor = AutoImageProcessor.from_pretrained(model_id)
-        return processor
+        return Mask2FormerImageProcessor.from_pretrained(model_id)
+    elif model_name == "mask2former_finetuned":
+        return Mask2FormerImageProcessor.from_pretrained(MASK2FORMER_DIR)
 
-model_names = ['dilatednet', 'mask2former']
+
+model_names = ['dilatednet', 'mask2former_finetuned', 'mask2former_pretrained']
 models = {}
 processors = {}
 
 for model_name in model_names:
     models[model_name] = load_model(model_name)
-    if model_name == "mask2former":
+    if model_name.startswith("mask2former"):
         processors[model_name] = load_processor(model_name)
 
 # ------------------------------------------------------------------------------
 
-def preprocess_image_from_file(file: UploadFile):
-    contents = file.file.read()
-    pil_img = Image.open(io.BytesIO(contents)).convert("RGB")
-    pil_img = pil_img.resize((img_width, img_height))
-    img_array = image.img_to_array(pil_img) / 255.0
-    return np.expand_dims(img_array, axis=0)
-
-def preprocess_image_from_path(path: str):
-    pil_img = Image.open(path).convert("RGB")
-    pil_img = pil_img.resize((img_width, img_height))
-    img_array = image.img_to_array(pil_img) / 255.0
-    return np.expand_dims(img_array, axis=0)
-
-def predict_mask(image_input, model_name: str = "dilatednet", from_file: bool = True):
+def predict_mask(image_input, original_size, model_name: str = "dilatednet", from_file: bool = True):
     model = models.get(model_name)
     if model is None:
         raise ValueError(f"Unknown model: {model_name}")
 
     if model_name == "dilatednet":
         # Prétraitement pour dilatednet
-        if from_file:
-            img_array = preprocess_image_from_file(image_input)
-        else:
-            img_array = preprocess_image_from_path(image_input)
-
+        img = image_input.resize((img_width, img_height))
+        img_array = image.img_to_array(img) / 255.0
+        img_array =  np.expand_dims(img_array, axis=0)
         prediction = model.predict(img_array)
         reshaped = prediction[0].reshape((img_height, img_width, n_classes))
-        predicted_mask = np.argmax(reshaped, axis=-1)
+        resized_logits = tf.image.resize(reshaped, original_size, method="bilinear").numpy()
+        # Calcul du masque final par argmax sur les logits (classe avec proba max)
+        predicted_mask = np.argmax(resized_logits, axis=-1)
         return predicted_mask
 
-    elif model_name == "mask2former":
+    elif model_name.startswith("mask2former"):
         # Prétraitement pour mask2former
-        if from_file:
-            pil_img = Image.open(io.BytesIO(image_input.file.read())).convert("RGB")
-        else:
-            pil_img = Image.open(image_input).convert("RGB")
-
-        processor = processors.get("mask2former")
+        processor = processors.get(model_name)
         if processor is None:
             raise ValueError("Processor for mask2former not loaded.")
 
         # Resize pour garder une référence à la taille originale
-        target_size = pil_img.size[::-1]  # (H, W)
-        inputs = processor(images=pil_img, return_tensors="pt")
+        inputs = processor(images=image_input, return_tensors="pt")
 
         with torch.no_grad():
             outputs = model(**inputs)
 
         # Post-processing pour obtenir les prédictions en trainIds
         pred_mask = processor.post_process_semantic_segmentation(
-            outputs, target_sizes=[target_size]
+            outputs, target_sizes=[original_size]
         )[0].cpu().numpy()
 
         # Remapping → 8 classes
-        pred_remapped = remap_cityscapes_to_8classes(pred_mask)
+        if model_name=='mask2former_pretrained':
+            pred_mask = remap_cityscapes_to_8classes(pred_mask)
 
-        # Resize pour correspondre à (img_height, img_width)
-        pred_resized = Image.fromarray(pred_remapped.astype(np.uint8)).resize((img_width, img_height), resample=Image.NEAREST)
-        return np.array(pred_resized)
-
-
-# ------------------------------------------------------------------------------
+        return np.array(pred_mask)
 
 @app.post("/predict_from_file/")
-async def predict_from_file(file: UploadFile = File(...), model_name: str = "dilatednet"):
-    print(f"Image reçue : {file.filename} — type : {file.content_type}")
-    predicted_mask = predict_mask(file, model_name=model_name, from_file=True)
-    return JSONResponse(content={"mask": predicted_mask.tolist()})
+async def predict_from_file(file: UploadFile = File(...),  model_name: str = Form(...)):
+    print(f"Image reçue : {file.filename} — type : {file.content_type} — modèle : {model_name}")
+
+    contents = file.file.read()
+    try:
+        img = Image.open(io.BytesIO(contents)).convert("RGB")
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Fichier image invalide."})
+
+    original_size = img.size[::-1]
+
+    predicted_mask = predict_mask(img, original_size, model_name=model_name, from_file=True)
+
+    # Affichage du masque avec une colormap
+    buf = generate_mask_overlay(img, predicted_mask)
+
+    # Retour de l'image en réponse HTTP
+    return Response(content=buf.getvalue(), media_type="image/png")
 
 class PredictRequest(BaseModel):
     image_id: str
-    model_name: Optional[str] = "dilatednet"
+    model_name: str
 
 @app.post("/predict_from_id/")
 async def predict_from_id(req: PredictRequest):
     image_path = os.path.join(DATA_DIR, f"{req.image_id}.png")
+    img = Image.open(image_path).convert("RGB")
+    original_size = img.size[::-1]
+
     if not os.path.exists(image_path):
         return JSONResponse(status_code=404, content={"error": "Image not found"})
 
-    predicted_mask = predict_mask(image_path, model_name=req.model_name, from_file=False)
-    return JSONResponse(content={"mask": predicted_mask.tolist()})
+    predicted_mask = predict_mask(img, original_size, model_name=req.model_name, from_file=False)
+
+    # Affichage du masque avec une colormap
+    buf = generate_mask_overlay(img, predicted_mask)
+
+    # Retour de l'image en réponse HTTP
+    return Response(content=buf.getvalue(), media_type="image/png")
