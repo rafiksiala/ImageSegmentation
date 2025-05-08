@@ -267,27 +267,21 @@ def load_model(model_name):
         model = tf.keras.models.load_model(DILATEDNET_PATH, compile=False)
         model.compile(optimizer=Adam(1e-4), loss=total_loss, metrics=[dice_coeff, 'accuracy'])
         return model
-    elif model_name == "mask2former_pretrained":
-        model_id = "facebook/mask2former-swin-small-cityscapes-semantic"
-        return Mask2FormerForUniversalSegmentation.from_pretrained(model_id)
-    elif model_name == "mask2former_finetuned":
+    elif model_name == "mask2former":
         return Mask2FormerForUniversalSegmentation.from_pretrained(MASK2FORMER_DIR)
 
 def load_processor(model_name):
-    if model_name == "mask2former_pretrained":
-        model_id = "facebook/mask2former-swin-small-cityscapes-semantic"
-        return Mask2FormerImageProcessor.from_pretrained(model_id)
-    elif model_name == "mask2former_finetuned":
+    if model_name == "mask2former":
         return Mask2FormerImageProcessor.from_pretrained(MASK2FORMER_DIR)
 
 
-model_names = ['dilatednet', 'mask2former_finetuned', 'mask2former_pretrained']
+model_names = ['dilatednet', 'mask2former']
 models = {}
 processors = {}
 
 for model_name in model_names:
     models[model_name] = load_model(model_name)
-    if model_name.startswith("mask2former"):
+    if model_name == "mask2former":
         processors[model_name] = load_processor(model_name)
 
 # ------------------------------------------------------------------------------
@@ -310,7 +304,7 @@ def predict_mask(image_input, original_size, model_name: str = "dilatednet", fro
         predicted_mask = np.argmax(resized_logits, axis=-1)
         return predicted_mask
 
-    elif model_name.startswith("mask2former"):
+    elif model_name == "mask2former":
         # Prétraitement pour mask2former
         processor = processors.get(model_name)
         if processor is None:
@@ -328,7 +322,7 @@ def predict_mask(image_input, original_size, model_name: str = "dilatednet", fro
         )[0].cpu().numpy()
 
         # Remapping → 8 classes
-        if model_name=='mask2former_pretrained':
+        if model_name == 'mask2former':
             pred_mask = remap_cityscapes_to_8classes(pred_mask)
 
         return np.array(pred_mask)
