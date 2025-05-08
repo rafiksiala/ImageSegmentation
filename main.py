@@ -21,6 +21,8 @@ from tensorflow.keras.optimizers import Adam
 from keras.losses import CategoricalCrossentropy
 from keras import backend as K
 
+from transformers import Mask2FormerForUniversalSegmentation, Mask2FormerImageProcessor
+import torch
 
 import zipfile
 
@@ -224,6 +226,21 @@ def download_models_if_needed():
         print("Modèle DilatedNet déjà présent.")
 
     # --- Mask2Former ---
+    os.makedirs(MASK2FORMER_DIR, exist_ok=True)
+    if not os.path.exists(os.path.join(MASK2FORMER_DIR, "config.json")):
+        print("Téléchargement du modèle Mask2Former...")
+        with requests.get(MASK2FORMER_URL, stream=True) as r:
+            r.raise_for_status()
+            with open(MASK2FORMER_ZIP_PATH, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        print("Extraction du modèle Mask2Former...")
+        with zipfile.ZipFile(MASK2FORMER_ZIP_PATH, 'r') as zip_ref:
+            zip_ref.extractall(MASK2FORMER_DIR)
+        os.remove(MASK2FORMER_ZIP_PATH)
+        print("Modèle Mask2Former téléchargé et extrait.")
+    else:
+        print("Modèle Mask2Former déjà extrait.")
 
 # Télécharger le modèle si nécessaire
 download_models_if_needed()
@@ -250,6 +267,12 @@ def load_model(model_name):
         model = tf.keras.models.load_model(DILATEDNET_PATH, compile=False)
         model.compile(optimizer=Adam(1e-4), loss=total_loss, metrics=[dice_coeff, 'accuracy'])
         return model
+    elif model_name == "mask2former":
+        return Mask2FormerForUniversalSegmentation.from_pretrained(MASK2FORMER_DIR)
+
+def load_processor(model_name):
+    if model_name == "mask2former":
+        return Mask2FormerImageProcessor.from_pretrained(MASK2FORMER_DIR)
 
 
 model_names = ['dilatednet', 'mask2former']
@@ -258,6 +281,8 @@ processors = {}
 
 for model_name in model_names:
     models[model_name] = load_model(model_name)
+    if model_name == "mask2former":
+        processors[model_name] = load_processor(model_name)
 
 # ------------------------------------------------------------------------------
 
@@ -279,6 +304,24 @@ def predict_mask(image_input, original_size, model_name: str = "dilatednet", fro
         predicted_mask = np.argmax(resized_logits, axis=-1)
         return predicted_mask
 
+    elif model_name == "mask2former":
+        # Prétraitement pour mask2former
+        processor = processors.get(model_name)
+        if processor is None:
+            raise ValueError("Processor for mask2former not loaded.")
+
+        # Resize pour garder une référence à la taille originale
+        inputs = processor(images=image_input, return_tensors="pt")
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+
+        # Post-processing pour obtenir les prédictions en trainIds
+        pred_mask = processor.post_process_semantic_segmentation(
+            outputs, target_sizes=[original_size]
+        )[0].cpu().numpy()
+
+        return np.array(pred_mask)
 
 @app.post("/predict_from_file/")
 async def predict_from_file(file: UploadFile = File(...),  model_name: str = Form(...)):
