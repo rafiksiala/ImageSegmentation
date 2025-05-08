@@ -209,7 +209,7 @@ DILATEDNET_PATH = "models/dilatednet.keras"
 
 MASK2FORMER_URL = "https://imgsegmodelstorage.blob.core.windows.net/models/mask2former.zip"
 MASK2FORMER_ZIP_PATH = "models/mask2former.zip"
-MASK2FORMER_DIR = "models/mask2former/mask2former"
+MASK2FORMER_DIR = "models/mask2former"
 
 def download_models_if_needed():
     # --- DilatedNet ---
